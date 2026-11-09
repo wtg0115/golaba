@@ -1,6 +1,6 @@
 /* 골라봄 서비스 워커: 앱 설치 조건을 채우고, 인터넷이 잠깐 끊겨도 앱 화면은 열리게 해 줘요.
    항상 최신 파일을 먼저 받아오고, 실패할 때만 저장해 둔 파일을 써요. */
-const CACHE = 'golrabom-v2';
+const CACHE = 'golrabom-v3';
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
