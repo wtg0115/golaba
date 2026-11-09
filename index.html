@@ -250,7 +250,8 @@ body.is-watch #app{padding-inline:0}
 .owner{display:flex;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap}
 .owner .avatar{width:40px;height:40px;font-size:17px}
 .owner-text{min-width:0;flex:1}
-.owner-name{font-size:16px;font-weight:500;line-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.owner-name{display:block;font-size:16px;font-weight:500;line-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+a.owner-name:hover{text-decoration:underline}
 .owner-sub{font-size:12px;line-height:18px;color:var(--fg2)}
 .actions{display:flex;gap:8px;flex:none}
 .list-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;font-size:16px;font-weight:700}
@@ -480,7 +481,18 @@ body.is-watch .rail,body.is-watch .bnav{display:none}
 .pl-count .ic{width:16px;height:16px}
 .pl-link{display:block;margin-top:2px;font-weight:500}
 .pl-link:hover{color:var(--fg)}
-@media (max-width:499px){ .grid .pl-stack::before{left:24px;right:24px} .grid .pl-stack::after{left:12px;right:12px} }
+@media (max-width:499px){
+  .grid.pl-grid{margin-inline:0;row-gap:16px}
+  .grid.pl-grid .card{display:flex;gap:12px;align-items:flex-start}
+  .grid.pl-grid .pl-stack{width:44%;max-width:180px;flex:none}
+  .grid.pl-grid .thumb{border-radius:8px}
+  .grid.pl-grid .pl-count{right:4px;bottom:4px;font-size:11px}
+  .grid.pl-grid .meta{padding:6px 0 0;flex:1;min-width:0}
+  .grid.pl-grid .avatar{display:none}
+  .grid.pl-grid .more{top:0;right:-10px}
+  .grid.pl-grid .text h3{font-size:15px;line-height:21px}
+  .grid.pl-grid .sub{font-size:12px;line-height:18px}
+}
 
 /* ---------- 재생목록 상세 ---------- */
 .plpage{display:flex;gap:24px;align-items:flex-start;padding-top:16px}
@@ -786,7 +798,20 @@ function load() {
 const db = load();
 function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) {} }
 const find = id => db.videos.find(v => v.id === id);
-const findPl = id => db.playlists.find(p => p.id === id);
+function hashStr(str) { let h = 5381; for (const c of str) h = (h * 33 + c.codePointAt(0)) >>> 0; return h.toString(36); }
+const chId = name => 'ch' + hashStr(name);
+/* 넣어 둔 영상을 올린 사람(유튜버)별로 자동으로 묶은 재생목록 */
+function channels() {
+  const m = new Map();
+  for (const v of db.videos) {
+    if (!v.author) continue;
+    const k = chId(v.author);
+    if (!m.has(k)) m.set(k, { id: k, name: v.author, items: [], virtual: true, updated: 0 });
+    const c = m.get(k); c.items.push(v.id); c.updated = Math.max(c.updated, v.added || 0);
+  }
+  return [...m.values()].sort((a, b) => b.items.length - a.items.length || a.name.localeCompare(b.name, 'ko'));
+}
+const findPl = id => !id ? null : id.startsWith('ch') ? (channels().find(c => c.id === id) || null) : (db.playlists.find(p => p.id === id) || null);
 const plVideos = p => p.items.map(find).filter(Boolean);
 const newId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 function newPl(name, items = [], src = null) {
@@ -850,12 +875,13 @@ async function runProbe() {
     const info = await probeOne(id);
     const cur = find(id); if (!cur) continue;
     cur.probed = true;
+    let changed = false;
     if (info) {
-      if (!cur.title && info.title) { cur.title = info.title; cur.author = cur.author || info.author; }
-      if (!cur.dur && info.dur) cur.dur = info.dur;
-      if (info.blocked) cur.blocked = true;
+      if (!cur.title && info.title) { cur.title = info.title; cur.author = cur.author || info.author; changed = true; }
+      if (!cur.dur && info.dur) { cur.dur = info.dur; changed = true; }
+      if (info.blocked && !cur.blocked) { cur.blocked = true; changed = true; }
     }
-    save(); rerender();
+    save(); if (changed) rerender();
   }
   probe.busy = false;
 }
@@ -972,9 +998,6 @@ const fileWarn = () => location.protocol === 'file:'
 function chipList() {
   const chips = [{ key: 'all', label: '전체' }];
   if (db.videos.some(v => v.pos > 5 && !v.watched)) chips.push({ key: 'cont', label: '보던 영상' });
-  const count = new Map();
-  for (const v of db.videos) if (v.author) count.set(v.author, (count.get(v.author) || 0) + 1);
-  if (count.size > 1) [...count].sort((a, b) => b[1] - a[1]).forEach(([a]) => chips.push({ key: 'a:' + a, label: a }));
   return chips;
 }
 function applyFilter(list) {
@@ -991,8 +1014,9 @@ function showHome() {
 }
 function renderHome() {
   if (!db.videos.length) { app.innerHTML = fileWarn() + installBarHTML() + emptyHTML(); bindQuickAdd(); return; }
-  const chips = chipList();
+  const chips = chipList(), oldChips = $('.chips', app), keepX = oldChips ? oldChips.scrollLeft : 0;
   if (!chips.some(c => c.key === view.filter)) view.filter = 'all';
+  setTimeout(() => { const c = $('.chips', app); if (c && keepX) c.scrollLeft = keepX; });
   app.innerHTML = `${fileWarn()}${installBarHTML()}
     ${chips.length > 1 ? `<div class="chips" role="toolbar" aria-label="분류">${chips.map(c =>
       `<button class="chip" type="button" data-act="chip" data-f="${esc(c.key)}" aria-pressed="${view.filter === c.key}">${esc(c.label)}</button>`).join('')}</div>` : ''}
@@ -1038,13 +1062,21 @@ function renderSearch() {
 function fmtLong(sec) { const h = Math.floor(sec / 3600), m = Math.round(sec % 3600 / 60); return h ? `${h}시간 ${m}분` : `${m}분`; }
 function showPlaylists() { enterView('playlists'); renderPlaylists(); scrollTo(0, 0); }
 function renderPlaylists() {
-  const list = db.playlists;
-  app.innerHTML = `<div class="page-head"><h1>재생목록</h1><div class="page-tools">
+  const list = db.playlists, chs = channels();
+  const tools = `<div class="page-tools">
       <button class="btn-chip" type="button" data-act="pl-new">${icon('add')}<span>새 재생목록</span></button>
-      <button class="btn-chip" type="button" data-act="pl-import">${icon('ytin')}<span>유튜브에서 가져오기</span></button></div></div>
-    ${list.length ? `<div class="grid">${list.map(plCardHTML).join('')}</div>` : `<section class="empty"><div class="empty-ic">${icon('playlist')}</div>
+      <button class="btn-chip" type="button" data-act="pl-import">${icon('ytin')}<span>유튜브에서 가져오기</span></button></div>`;
+  if (!list.length && !chs.length) {
+    app.innerHTML = `<div class="page-head"><h1>재생목록</h1>${tools}</div><section class="empty"><div class="empty-ic">${icon('playlist')}</div>
       <h1>재생목록이 아직 없어요</h1><p>새로 만들거나, 유튜브에 만들어 둔 재생목록 링크를 붙여넣어 가져오세요.</p>
-      <div class="row-btns"><button class="btn-primary" type="button" data-act="pl-new">새 재생목록</button><button class="btn-text" type="button" data-act="pl-import">유튜브에서 가져오기</button></div></section>`}`;
+      <div class="row-btns"><button class="btn-primary" type="button" data-act="pl-new">새 재생목록</button><button class="btn-text" type="button" data-act="pl-import">유튜브에서 가져오기</button></div></section>`;
+    return;
+  }
+  app.innerHTML = `<div class="page-head"><h1>재생목록</h1>${tools}</div>
+    <h2 class="group-h">내 재생목록</h2>
+    ${list.length ? `<div class="grid pl-grid">${list.map(plCardHTML).join('')}</div>` : `<p class="list-note">아직 만든 재생목록이 없어요. 위의 ‘새 재생목록’이나 ‘유튜브에서 가져오기’로 시작해 보세요.</p>`}
+    ${chs.length ? `<h2 class="group-h">유튜버별</h2><p class="set-note">넣어 둔 영상을 올린 사람별로 자동으로 모아요. 영상을 넣고 빼면 알아서 바뀌어요.</p>
+      <div class="grid pl-grid">${chs.map(plCardHTML).join('')}</div>` : ''}`;
 }
 function plCardHTML(p) {
   const vids = plVideos(p), first = vids[0];
@@ -1052,9 +1084,9 @@ function plCardHTML(p) {
     <a class="pl-stack" href="#/playlist/${p.id}" tabindex="-1" aria-hidden="true"><span class="thumb">
       ${first ? `<img loading="lazy" decoding="async" alt="" src="${thumb(first.id)}">` : `<span class="pl-empty">${icon('playlist')}</span>`}
       <span class="pl-count">${icon('playlist')}동영상 ${vids.length}개</span></span></a>
-    <div class="meta"><div class="text">
+    <div class="meta">${p.virtual ? avatarHTML({ author: p.name }) : ''}<div class="text">
       <a href="#/playlist/${p.id}"><h3>${esc(p.name)}</h3></a>
-      <p class="sub">${p.src ? '유튜브에서 가져옴 · ' : ''}${ago(p.updated)} 업데이트</p>
+      <p class="sub">${p.virtual ? '유튜버 · 자동으로 모음' : `${p.src ? '유튜브에서 가져옴 · ' : ''}${ago(p.updated)} 업데이트`}</p>
       <a class="sub pl-link" href="#/playlist/${p.id}">전체 재생목록 보기</a></div>
       <button class="icon-btn more" type="button" data-act="pl-menu" data-pl="${p.id}" aria-label="더보기" aria-haspopup="menu">${icon('more')}</button></div>
   </article>`;
@@ -1069,7 +1101,7 @@ function plRowHTML(p, v, i) {
     <span class="plrow-idx">${i + 1}</span>
     <a class="thumb" href="${watchHref(v.id, p.id)}" tabindex="-1" aria-hidden="true"><img loading="lazy" decoding="async" alt="" src="${thumb(v.id)}">${pr ? `<span class="prog"><i style="width:${pr.toFixed(1)}%"></i></span>` : ''}${v.dur ? `<span class="dur">${fmt(v.dur)}</span>` : ''}</a>
     <div class="plrow-text"><a href="${watchHref(v.id, p.id)}"><h3>${esc(v.title || '제목을 불러오는 중…')}</h3></a><p class="sub">${esc(v.author || '유튜브')}</p></div>
-    <button class="icon-btn more" type="button" data-act="plrow-menu" data-pl="${p.id}" data-id="${v.id}" aria-label="더보기" aria-haspopup="menu">${icon('more')}</button>
+    <button class="icon-btn more" type="button" data-act="${p.virtual ? 'card-menu' : 'plrow-menu'}" data-pl="${p.id}" data-id="${v.id}" aria-label="더보기" aria-haspopup="menu">${icon('more')}</button>
   </li>`;
 }
 function renderPlaylist() {
@@ -1081,8 +1113,8 @@ function renderPlaylist() {
       <div class="plhero-in">
         <div class="thumb plhero-thumb">${first ? `<img alt="" src="${thumb(first.id)}">` : `<span class="pl-empty">${icon('playlist')}</span>`}</div>
         <h1>${esc(p.name)}</h1>
-        <p class="plhero-sub">동영상 ${vids.length}개${total ? ` · ${fmtLong(total)}` : ''} · ${ago(p.updated)} 업데이트${p.src ? '<br>유튜브에서 가져온 재생목록' : ''}</p>
-        <div class="plhero-tools">
+        <p class="plhero-sub">${p.virtual ? '유튜버 · ' : ''}동영상 ${vids.length}개${total ? ` · ${fmtLong(total)}` : ''}${p.virtual ? '<br>넣어 둔 영상 중 이 유튜버 영상을 자동으로 모아요' : ` · ${ago(p.updated)} 업데이트${p.src ? '<br>유튜브에서 가져온 재생목록' : ''}`}</p>
+        <div class="plhero-tools"${p.virtual ? ' hidden' : ''}>
           <button class="icon-btn" type="button" data-act="pl-rename" data-pl="${p.id}" aria-label="이름 바꾸기" title="이름 바꾸기">${icon('edit')}</button>
           ${p.src ? `<button class="icon-btn" type="button" data-act="pl-sync" data-pl="${p.id}" aria-label="유튜브에서 다시 불러오기" title="유튜브에서 다시 불러오기">${icon('sync')}</button>` : ''}
           <button class="icon-btn" type="button" data-act="pl-delete" data-pl="${p.id}" aria-label="재생목록 삭제" title="재생목록 삭제">${icon('del')}</button>
@@ -1094,7 +1126,7 @@ function renderPlaylist() {
       </div>
     </aside>
     <section class="pllist">
-      <div class="pllist-tools">
+      <div class="pllist-tools"${p.virtual ? ' hidden' : ''}>
         <button class="btn-chip" type="button" data-act="pl-pick" data-pl="${p.id}">${icon('playlist')}<span>내 영상에서 고르기</span></button>
         <button class="btn-chip" type="button" data-act="pl-add-links" data-pl="${p.id}">${icon('add')}<span>링크로 추가</span></button>
       </div>
@@ -1224,7 +1256,7 @@ function renderWatchMeta(v) {
   info.innerHTML = `<h1 class="v-title${v.title ? '' : ' is-loading'}">${esc(v.title || '제목을 불러오는 중…')}</h1>
     <div class="owner">
       ${avatarHTML(v)}
-      <div class="owner-text"><div class="owner-name">${esc(v.author || '유튜브')}</div><div class="owner-sub">${ago(v.added)} 추가</div></div>
+      <div class="owner-text">${v.author ? `<a class="owner-name" href="#/playlist/${chId(v.author)}" title="이 유튜버 영상 모아 보기">${esc(v.author)}</a>` : `<div class="owner-name">유튜브</div>`}<div class="owner-sub">${ago(v.added)} 추가</div></div>
       <div class="actions">
         <button class="btn-chip" type="button" data-act="save-to" data-id="${v.id}">${icon('plsave')}<span>저장</span></button>
         <button class="btn-chip" type="button" data-act="copy-link" data-id="${v.id}">${icon('link')}<span>링크 복사</span></button>
@@ -2205,6 +2237,10 @@ function playPl(id, shuf) {
 }
 function plMenu(id) {
   const p = findPl(id); if (!p) return [];
+  if (p.virtual) return [
+    { icon: 'play', label: '모두 재생', run: () => playPl(id, false) },
+    { icon: 'shuffle', label: '셔플 재생', run: () => playPl(id, true) }
+  ];
   return [
     { icon: 'play', label: '모두 재생', run: () => playPl(id, false) },
     { icon: 'shuffle', label: '셔플 재생', run: () => playPl(id, true) },
